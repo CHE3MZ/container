@@ -63,6 +63,18 @@ jobs:
           swift --version
           xcodebuild -version || true
 
+      - name: Select latest installed Xcode
+        # Hosted images ship several Xcodes with an often-outdated default;
+        # the package requires a recent Swift tools version, so pick the
+        # newest Xcode present (BSD sort has no -V; alphabetical tail works
+        # for the Xcode_<major> naming used on hosted images).
+        run: |
+          ls -d /Applications/Xcode*.app
+          latest="$(ls -d /Applications/Xcode*.app | sort | tail -1)/Contents/Developer"
+          echo "Selecting Xcode at $latest"
+          sudo xcode-select -s "$latest"
+          swift --version
+
       - name: Lint changed files with repo config
         run: |
           files=$(git diff --name-only origin/main...HEAD -- '*.swift' | grep -v '\.pb\.swift' | grep -v '\.grpc\.swift' || true)
@@ -80,6 +92,8 @@ jobs:
           fetch-depth: 0
 
       - name: Check license headers
+        env:
+          HAWKEYE_AUTO_INSTALL: "1"
         run: ./scripts/ensure-hawkeye-exists.sh && .local/bin/hawkeye check --fail-if-unknown
 
   build:
@@ -100,6 +114,14 @@ jobs:
         run: |
           swift --version
           xcodebuild -version || true
+
+      - name: Select latest installed Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          latest="$(ls -d /Applications/Xcode*.app | sort | tail -1)/Contents/Developer"
+          echo "Selecting Xcode at $latest"
+          sudo xcode-select -s "$latest"
+          swift --version
 
       - name: Resolve dependencies
         run: swift package resolve
@@ -130,6 +152,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Select latest installed Xcode
+        run: |
+          latest="$(ls -d /Applications/Xcode*.app | sort | tail -1)/Contents/Developer"
+          echo "Selecting Xcode at $latest"
+          sudo xcode-select -s "$latest"
+          swift --version
 
       # TestCLI and IntegrationTests need Virtualization.framework VMs
       # (nested virt), unavailable on hosted runners.

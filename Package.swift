@@ -312,7 +312,7 @@ let package = Package(
         .testTarget(
             name: "ContainerImagesServiceTests",
             dependencies: [
-                "ContainerImagesService",
+                "ContainerImagesService"
             ]
         ),
         .executableTarget(

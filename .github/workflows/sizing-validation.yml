@@ -168,3 +168,60 @@ jobs:
       # (nested virt), unavailable on hosted runners.
       - name: Run unit tests
         run: swift test -c debug -Xswiftc -warnings-as-errors -Xswiftc -enable-testing --skip TestCLI --skip IntegrationTests
+
+  live-pull:
+    # Functional proof that sizing behaves as designed. Needs no VMs:
+    # pull + unpack is pure userspace (fetch blobs, format ext4 sparse file).
+    # Uses an isolated CONTAINER_APP_ROOT so the runner is untouched.
+    # NOTE: this branch predates PR #2378, so `pull` still unpacks every
+    # architecture in the manifest; assertions are written for that.
+    name: Live pull sizing smoke test
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Select latest installed Xcode
+        run: |
+          latest="$(ls -d /Applications/Xcode*.app | sort | tail -1)/Contents/Developer"
+          sudo xcode-select -s "$latest"
+          swift --version
+
+      - name: Build container product
+        run: swift build -c debug -Xswiftc -warnings-as-errors -Xswiftc -enable-testing --product container
+
+      - name: Pull images and assert snapshot sizes
+        timeout-minutes: 60
+        run: |
+          set -euo pipefail
+          export APP_ROOT="$(mktemp -d "${RUNNER_TEMP}/approot.XXXXXX")"
+          export CONTAINER_APP_ROOT="$APP_ROOT"
+          BIN="$(swift build -c debug --show-bin-path)/container"
+          echo "APP_ROOT=$APP_ROOT"
+          "$BIN" system start --timeout 180 --enable-kernel-install
+          "$BIN" image pull alpine:latest
+          count=$(find "$APP_ROOT/snapshots" -name snapshot -type f | wc -l | tr -d ' ')
+          echo "snapshot files: $count"
+          test "$count" -ge 1
+          # No snapshot may exceed the 128GiB fallback capacity: proves the
+          # 512GiB default is gone (dynamic floor gives ~4GiB for alpine).
+          overflow=0
+          for f in "$APP_ROOT"/snapshots/*/snapshot; do
+            bytes=$(stat -f %z "$f")
+            echo "$f logical bytes: $bytes"
+            if [ "$bytes" -gt 137438953472 ]; then overflow=1; fi
+          done
+          test "$overflow" -eq 0
+          # Explicit --size provisions exactly that virtual size. Identify the
+          # new snapshot by diffing the snapshot list before/after.
+          find "$APP_ROOT/snapshots" -name snapshot -type f | sort > /tmp/snaps_before.txt
+          "$BIN" image pull --size 10g hello-world:latest
+          hw=$(comm -13 /tmp/snaps_before.txt <(find "$APP_ROOT/snapshots" -name snapshot -type f | sort) | head -1)
+          echo "hello-world snapshot: $hw"
+          test -n "$hw"
+          test "$(stat -f %z "$hw")" -eq 10737418240
+          "$BIN" system df
+          "$BIN" system stop || true

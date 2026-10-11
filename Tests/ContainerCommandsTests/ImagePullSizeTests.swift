@@ -25,7 +25,7 @@ struct ImagePullSizeTests {
     }
 
     @Test func gibibytesParseToExactBytes() throws {
-        #expect(try Application.ImagePull.parseSize("10g") == 10_737_741_824 * 10)
+        #expect(try Application.ImagePull.parseSize("10g") == 10_737_741_824)
         #expect(try Application.ImagePull.parseSize("1g") == 1_073_741_824)
         #expect(try Application.ImagePull.parseSize("512g") == 549_755_813_888)
     }

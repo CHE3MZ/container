@@ -45,6 +45,37 @@ public actor SnapshotStore {
     /// Time Machine report sane logical sizes.
     public static let defaultSnapshotCapacityBytes: UInt64 = 128.gib()
 
+    /// Minimum virtual capacity accepted for an image snapshot.
+    ///
+    /// Snapshots double as the container's writable root filesystem with no
+    /// post-mount grow path, so capacities below this floor risk ENOSPC during
+    /// normal runtime writes.
+    public static let minimumSnapshotCapacityBytes: UInt64 = 1.gib()
+
+    /// Maximum virtual capacity accepted for an image snapshot.
+    ///
+    /// Matches the historic default, which is the largest capacity this
+    /// codebase has ever provisioned. Requests above it are rejected instead of
+    /// risking block-count overflow in the ext4 formatter.
+    public static let maximumSnapshotCapacityBytes: UInt64 = 512.gib()
+
+    /// Validates an explicitly requested snapshot capacity.
+    public static func validatedSnapshotCapacity(_ bytes: UInt64) throws -> UInt64 {
+        guard bytes >= minimumSnapshotCapacityBytes else {
+            throw ContainerizationError(
+                .invalidArgument,
+                message: "snapshot size too small: minimum is 1GiB (got \(bytes) bytes)"
+            )
+        }
+        guard bytes <= maximumSnapshotCapacityBytes else {
+            throw ContainerizationError(
+                .invalidArgument,
+                message: "snapshot size too large: maximum is 512GiB (got \(bytes) bytes)"
+            )
+        }
+        return bytes
+    }
+
     public static func defaultUnpackStrategy(initImage: String) -> UnpackStrategy {
         { image, platform in
             guard platform.os == "linux" else {
@@ -76,7 +107,11 @@ public actor SnapshotStore {
         try self.fm.createDirectory(at: self.ingestDir, withIntermediateDirectories: true)
     }
 
-    public func unpack(image: Containerization.Image, platform: Platform? = nil, progressUpdate: ProgressUpdateHandler?) async throws {
+    public func unpack(image: Containerization.Image, platform: Platform? = nil, snapshotSizeBytes: UInt64? = nil, progressUpdate: ProgressUpdateHandler?) async throws {
+        // An explicitly requested capacity overrides the unpack strategy.
+        // Validated here (server side, authoritative) so no caller can provision
+        // outside the [minimum, maximum] range, regardless of transport.
+        let requestedCapacity = try snapshotSizeBytes.map(Self.validatedSnapshotCapacity)
         var toUnpack: [Descriptor] = []
         if let platform {
             let desc = try await image.descriptor(for: platform)
@@ -98,9 +133,14 @@ public actor SnapshotStore {
             guard let platform = desc.platform else {
                 throw ContainerizationError(.internalError, message: "missing platform for descriptor \(desc.digest)")
             }
-            guard let unpacker = try await self.unpackStrategy(image, platform) else {
+            guard var unpacker = try await self.unpackStrategy(image, platform) else {
                 self.log?.warning("no unpacker configured, skipping unpack for \(image.reference) for platform \(platform.description)")
                 continue
+            }
+            if let requestedCapacity {
+                // Explicit user request wins over the strategy default. The journal
+                // matches the default strategy so behavior is identical apart from size.
+                unpacker = EXT4Unpacker(capacityInBytes: requestedCapacity, journal: .init(defaultMode: .ordered))
             }
             let currentSubTask = await taskManager.startTask()
             if let progressUpdate {

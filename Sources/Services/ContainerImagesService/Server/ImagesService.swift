@@ -335,7 +335,7 @@ public actor ImagesService {
 // MARK: Image Snapshot Methods
 
 extension ImagesService {
-    public func unpack(description: ImageDescription, platform: Platform?, progressUpdate: ProgressUpdateHandler?) async throws {
+    public func unpack(description: ImageDescription, platform: Platform?, snapshotSizeBytes: UInt64? = nil, progressUpdate: ProgressUpdateHandler?) async throws {
         self.log.debug(
             "ImagesService: enter",
             metadata: [
@@ -356,7 +356,7 @@ extension ImagesService {
         }
 
         let img = try await self._get(description)
-        try await self.snapshotStore.unpack(image: img, platform: platform, progressUpdate: progressUpdate)
+        try await self.snapshotStore.unpack(image: img, platform: platform, snapshotSizeBytes: snapshotSizeBytes, progressUpdate: progressUpdate)
     }
 
     public func deleteImageSnapshot(description: ImageDescription, platform: Platform?) async throws {

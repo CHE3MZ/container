@@ -230,9 +230,14 @@ extension ImagesServiceHarness {
         if let platformData = message.dataNoCopy(key: .ociPlatform) {
             platform = try JSONDecoder().decode(ContainerizationOCI.Platform.self, from: platformData)
         }
+        // xpc_dictionary_get_uint64 returns 0 for missing keys, so 0 means
+        // "no explicit size" and preserves backward compatibility with older
+        // clients that never send this key.
+        let sizeValue = message.uint64(key: .snapshotSizeBytes)
+        let snapshotSizeBytes: UInt64? = sizeValue > 0 ? sizeValue : nil
 
         let progressUpdateService = ProgressUpdateService(message: message)
-        try await self.service.unpack(description: description, platform: platform, progressUpdate: progressUpdateService?.handler)
+        try await self.service.unpack(description: description, platform: platform, snapshotSizeBytes: snapshotSizeBytes, progressUpdate: progressUpdateService?.handler)
 
         let reply = message.reply()
         return reply

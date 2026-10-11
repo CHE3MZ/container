@@ -38,6 +38,8 @@ public enum ImagesServiceXPCKeys: String {
     case maxConcurrentDownloads
     case forceLoad
     case rejectedMembers
+    /// Explicitly requested snapshot capacity in bytes (absent = strategy default).
+    case snapshotSizeBytes
 
     /// ContentStore
     case digest

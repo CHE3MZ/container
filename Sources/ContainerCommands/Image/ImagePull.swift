@@ -19,6 +19,7 @@ import ContainerAPIClient
 import ContainerPersistence
 import ContainerPlugin
 import Containerization
+import ContainerizationError
 import ContainerizationOCI
 import TerminalProgress
 
@@ -53,6 +54,11 @@ extension Application {
             help: "Limit the pull to the specified platform (format: os/arch[/variant], takes precedence over --os and --arch) [environment: CONTAINER_DEFAULT_PLATFORM]"
         )
         var platform: String?
+
+        @Option(
+            help: "Virtual size of the unpacked image snapshot (for example 10g). Must be between 1GiB and 512GiB; defaults to the system default when omitted."
+        )
+        var size: String?
 
         @OptionGroup
         public var logOptions: Flags.Logging
@@ -102,9 +108,31 @@ extension Application {
             progress.set(description: "Unpacking image")
             progress.set(itemsName: "entries")
             let unpackTask = await taskManager.startTask()
-            try await image.unpack(platform: p, progressUpdate: ProgressTaskCoordinator.handler(for: unpackTask, from: progress.handler))
+            // Client-side early validation; the server re-validates authoritatively
+            // at the XPC boundary (SnapshotStore.validatedSnapshotCapacity).
+            let snapshotSizeBytes = try Self.parseSize(size)
+            try await image.unpack(platform: p, snapshotSizeBytes: snapshotSizeBytes, progressUpdate: ProgressTaskCoordinator.handler(for: unpackTask, from: progress.handler))
             await taskManager.finish()
             progress.finish()
+        }
+
+        /// Parses a `--size` value (for example `10g`) into bytes, or nil when omitted.
+        /// Bounds mirror SnapshotStore.minimum/maximumSnapshotCapacityBytes (1GiB
+        /// to 512GiB); the server enforces them authoritatively.
+        static func parseSize(_ sizeString: String?) throws -> UInt64? {
+            guard let sizeString else {
+                return nil
+            }
+            let bytes = try Measurement.parse(parsing: sizeString).converted(to: .bytes).value
+            // Range-check on Double first: converting an out-of-range Double
+            // with UInt64() would trap instead of throwing.
+            guard bytes >= 1_073_741_824 else {
+                throw ContainerizationError(.invalidArgument, message: "snapshot size too small: minimum is 1GiB (got \(sizeString))")
+            }
+            guard bytes <= 549_755_813_888 else {
+                throw ContainerizationError(.invalidArgument, message: "snapshot size too large: maximum is 512GiB (got \(sizeString))")
+            }
+            return UInt64(bytes)
         }
     }
 }

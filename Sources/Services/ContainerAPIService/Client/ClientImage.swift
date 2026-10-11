@@ -416,12 +416,15 @@ extension ClientImage {
 
     // MARK: Snapshot Methods
 
-    public func unpack(platform: Platform?, progressUpdate: ProgressUpdateHandler? = nil) async throws {
+    public func unpack(platform: Platform?, snapshotSizeBytes: UInt64? = nil, progressUpdate: ProgressUpdateHandler? = nil) async throws {
         let client = Self.newXPCClient()
         let request = Self.newRequest(.imageUnpack)
 
         try request.set(description: description)
         try request.set(platform: platform)
+        if let snapshotSizeBytes {
+            request.set(key: .snapshotSizeBytes, value: snapshotSizeBytes)
+        }
 
         var progressUpdateClient: ProgressUpdateClient?
         if let progressUpdate {

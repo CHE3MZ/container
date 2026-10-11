@@ -246,6 +246,14 @@ jobs:
           hw=$(comm -13 /tmp/snaps_before.txt <(find "$APP_ROOT/snapshots" -name snapshot -type f | sort) | head -1)
           echo "hello-world snapshot: $hw"
           test -n "$hw"
-          test "$(stat -f %z "$hw")" -eq 10737418240
+          # Requested capacity is a floor, not exact: close() adds the journal
+          # (128MiB ceiling at this size) on top of minDiskSize, so expect
+          # 10GiB <= logical <= 11GiB rather than exact equality.
+          hwbytes=$(stat -f %z "$hw")
+          echo "hello-world logical bytes: $hwbytes"
+          test "$hwbytes" -ge 10737418240
+          test "$hwbytes" -le 11811160064
+          echo "allocated:"
+          du -sh "$APP_ROOT/snapshots"
           "$BIN" system df
           "$BIN" system stop || true

@@ -83,7 +83,9 @@ jobs:
 
   license-check:
     name: License headers
-    runs-on: ubuntu-latest
+    # hawkeye ships Apple-silicon macOS binaries only; ubuntu runners cannot
+    # install it (upstream runs this on self-hosted macOS).
+    runs-on: macos-26
     timeout-minutes: 10
     steps:
       - name: Checkout test branch

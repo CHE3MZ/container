@@ -6,7 +6,9 @@ name: sizing-change validation (fork-only)
 # this workflow approximates what it can on GitHub-hosted runners:
 # changed-file formatting, full build, and unit tests.
 # Integration tests are deliberately excluded: they need nested
-# virtualization, which hosted runners do not provide.
+# virtualization, which hosted runners do not provide. Only macos-26 is in
+# the matrix: the macos-15 image ships at most Swift 6.1 while the package
+# requires Swift tools 6.2, so that leg can never pass (verified).
 
 permissions:
   contents: read
@@ -49,7 +51,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, macos-15]
+        os: [macos-26]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -103,7 +105,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, macos-15]
+        os: [macos-26]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -146,7 +148,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, macos-15]
+        os: [macos-26]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:

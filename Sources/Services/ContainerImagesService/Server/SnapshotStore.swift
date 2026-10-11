@@ -35,6 +35,16 @@ public actor SnapshotStore {
     /// If the given platform for the image cannot be unpacked return `nil`.
     public typealias UnpackStrategy = @Sendable (Containerization.Image, Platform) async throws -> Unpacker?
 
+    /// Default virtual capacity for unpacked image snapshots.
+    ///
+    /// Snapshots are APFS sparse files, so this is the size the filesystem can
+    /// grow to rather than the space it occupies on disk. It must comfortably
+    /// cover both the unpacked image content and later runtime writes, since the
+    /// snapshot is cloned as the container's writable root filesystem and there
+    /// is no post-mount grow path. Kept moderate (was 512 GiB) so Finder and
+    /// Time Machine report sane logical sizes.
+    public static let defaultSnapshotCapacityBytes: UInt64 = 128.gib()
+
     public static func defaultUnpackStrategy(initImage: String) -> UnpackStrategy {
         { image, platform in
             guard platform.os == "linux" else {
@@ -44,7 +54,7 @@ public actor SnapshotStore {
             if image.reference == initImage {
                 capacityInBytes = 512.mib()
             } else {
-                capacityInBytes = 512.gib()
+                capacityInBytes = Self.defaultSnapshotCapacityBytes
             }
             return EXT4Unpacker(capacityInBytes: capacityInBytes, journal: .init(defaultMode: .ordered))
         }

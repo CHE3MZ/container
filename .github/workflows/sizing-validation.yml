@@ -190,8 +190,29 @@ jobs:
           sudo xcode-select -s "$latest"
           swift --version
 
-      - name: Build container product
-        run: swift build -c debug -Xswiftc -warnings-as-errors -Xswiftc -enable-testing --product container
+      - name: Build all products (services must exist for system start)
+        # NOTE: not `--product container`: `system start` launches helper
+        # binaries (apiserver, core-images, ...) which must be built too.
+        run: swift build -c debug -Xswiftc -warnings-as-errors -Xswiftc -enable-testing
+
+      - name: Stage install layout and ad-hoc sign
+        # Mirrors the Makefile staging + codesign steps without building the
+        # installer package (pkgbuild needs release signing; unrelated here).
+        run: |
+          set -euo pipefail
+          make "bin/debug/staging/"
+          STAGE="$PWD/bin/debug/staging"
+          OPTS="--force --sign - --timestamp=none"
+          codesign $OPTS --identifier com.apple.container.cli "$STAGE/bin/container"
+          codesign $OPTS --identifier com.apple.container.apiserver "$STAGE/bin/container-apiserver"
+          codesign $OPTS --prefix=com.apple.container. "$STAGE/libexec/container/plugins/container-core-images/bin/container-core-images"
+          codesign $OPTS --prefix=com.apple.container. --entitlements=signing/container-runtime-linux.entitlements "$STAGE/libexec/container/plugins/container-runtime-linux/bin/container-runtime-linux"
+          codesign $OPTS --prefix=com.apple.container. --entitlements=signing/container-network-vmnet.entitlements "$STAGE/libexec/container/plugins/container-network-vmnet/bin/container-network-vmnet"
+          codesign $OPTS --prefix=com.apple.container. "$STAGE/libexec/container/plugins/machine-apiserver/bin/machine-apiserver"
+          codesign $OPTS --prefix=com.apple.container. "$STAGE/libexec/container/plugins/k8s/bin/k8s"
+          codesign $OPTS --prefix=com.apple.container. "$STAGE/libexec/container/plugins/build/bin/build"
+          codesign $OPTS --prefix=com.apple.container. "$STAGE/libexec/container/plugins/builder/bin/builder"
+          ls "$STAGE/bin" "$STAGE/libexec/container/plugins"
 
       - name: Pull images and assert snapshot sizes
         timeout-minutes: 60
@@ -199,9 +220,10 @@ jobs:
           set -euo pipefail
           export APP_ROOT="$(mktemp -d "${RUNNER_TEMP}/approot.XXXXXX")"
           export CONTAINER_APP_ROOT="$APP_ROOT"
-          BIN="$(swift build -c debug --show-bin-path)/container"
+          export CONTAINER_INSTALL_ROOT="$PWD/bin/debug/staging"
+          BIN="$PWD/bin/debug/staging/bin/container"
           echo "APP_ROOT=$APP_ROOT"
-          "$BIN" system start --timeout 180 --enable-kernel-install
+          "$BIN" system start --timeout 180 --enable-kernel-install --app-root "$APP_ROOT" --install-root "$PWD/bin/debug/staging"
           "$BIN" image pull alpine:latest
           count=$(find "$APP_ROOT/snapshots" -name snapshot -type f | wc -l | tr -d ' ')
           echo "snapshot files: $count"

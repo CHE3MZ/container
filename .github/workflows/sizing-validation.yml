@@ -1,0 +1,137 @@
+name: sizing-change validation (fork-only)
+
+# Test scaffolding for the snapshot disk-sizing work. Lives ONLY on
+# test/* branches so it never leaks into upstream PRs. Upstream validates
+# via .github/workflows/common.yml on self-hosted macOS Tahoe runners;
+# this workflow approximates what it can on GitHub-hosted runners:
+# changed-file formatting, full build, and unit tests.
+# Integration tests are deliberately excluded: they need nested
+# virtualization, which hosted runners do not provide.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - "test/**"
+  workflow_dispatch:
+
+jobs:
+  changed-files:
+    name: List changed Swift files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      swift_files: ${{ steps.diff.outputs.swift_files }}
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Diff Swift files against main
+        id: diff
+        run: |
+          files=$(git diff --name-only origin/main...HEAD -- '*.swift' | grep -v '\.pb\.swift' | grep -v '\.grpc\.swift' || true)
+          echo "Changed Swift files:"
+          echo "$files"
+          {
+            echo "swift_files<<EOF"
+            echo "$files"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  format-check:
+    name: swift-format lint (changed files only)
+    needs: changed-files
+    if: needs.changed-files.outputs.swift_files != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version || true
+
+      - name: Lint changed files with repo config
+        run: |
+          files=$(git diff --name-only origin/main...HEAD -- '*.swift' | grep -v '\.pb\.swift' | grep -v '\.grpc\.swift' || true)
+          # shellcheck disable=SC2086
+          swift format lint --strict --configuration .swift-format-nolint $files
+
+  license-check:
+    name: License headers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check license headers
+        run: ./scripts/ensure-hawkeye-exists.sh && .local/bin/hawkeye check --fail-if-unknown
+
+  build:
+    name: Build container CLI
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version || true
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      # NOTE: intentionally `swift build`, not `make container`: the latter
+      # also builds the installer package, whose ad-hoc signing step fails on
+      # hosted runners (and is unrelated to source changes).
+      - name: Build container product
+        run: swift build -c debug -Xswiftc -warnings-as-errors -Xswiftc -enable-testing --product container
+
+      - name: CLI smoke test (no daemon)
+        run: |
+          bin=$(swift build -c debug --show-bin-path)/container
+          "$bin" image pull --help | grep -q -- '--size' && echo "--size flag present"
+          "$bin" image pull --help | grep -q -- '--all-platforms' || echo "(note: --all-platforms lives on PR #2378, not this branch)"
+
+  unit-tests:
+    name: Unit tests (no integration)
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # TestCLI and IntegrationTests need Virtualization.framework VMs
+      # (nested virt), unavailable on hosted runners.
+      - name: Run unit tests
+        run: swift test -c debug -Xswiftc -warnings-as-errors -Xswiftc -enable-testing --skip TestCLI --skip IntegrationTests

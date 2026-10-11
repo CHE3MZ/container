@@ -309,6 +309,12 @@ let package = Package(
                 "ContainerTestSupport",
             ]
         ),
+        .testTarget(
+            name: "ContainerImagesServiceTests",
+            dependencies: [
+                "ContainerImagesService",
+            ]
+        ),
         .executableTarget(
             name: "container-core-images",
             dependencies: [

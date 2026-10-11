@@ -22,7 +22,7 @@ struct SnapshotCapacityValidationTests {
     @Test func acceptsBoundsAndInteriorValues() throws {
         #expect(try SnapshotStore.validatedSnapshotCapacity(1_073_741_824) == 1_073_741_824)
         #expect(try SnapshotStore.validatedSnapshotCapacity(549_755_813_888) == 549_755_813_888)
-        #expect(try SnapshotStore.validatedSnapshotCapacity(10_737_741_824) == 10_737_741_824)
+        #expect(try SnapshotStore.validatedSnapshotCapacity(10_737_418_240) == 10_737_418_240)
     }
 
     @Test func rejectsOutOfBounds() {

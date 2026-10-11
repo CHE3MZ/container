@@ -21,6 +21,7 @@ import ContainerPlugin
 import Containerization
 import ContainerizationError
 import ContainerizationOCI
+import Foundation
 import TerminalProgress
 
 extension Application {

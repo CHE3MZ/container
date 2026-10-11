@@ -56,7 +56,7 @@ extension Application {
         var platform: String?
 
         @Option(
-            help: "Virtual size of the unpacked image snapshot (for example 10g). Must be between 1GiB and 512GiB; defaults to the system default when omitted."
+            help: "Virtual size of the unpacked image snapshot (for example 10g). Must be between 1GiB and 512GiB; when omitted the size is computed from the image content with headroom."
         )
         var size: String?
 

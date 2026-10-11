@@ -37,6 +37,7 @@ public actor SnapshotStore {
 
     /// Default virtual capacity for unpacked image snapshots.
     ///
+    /// Used as the fallback when the image content size cannot be determined.
     /// Snapshots are APFS sparse files, so this is the size the filesystem can
     /// grow to rather than the space it occupies on disk. It must comfortably
     /// cover both the unpacked image content and later runtime writes, since the
@@ -44,6 +45,57 @@ public actor SnapshotStore {
     /// is no post-mount grow path. Kept moderate (was 512 GiB) so Finder and
     /// Time Machine report sane logical sizes.
     public static let defaultSnapshotCapacityBytes: UInt64 = 128.gib()
+
+    /// Floor for dynamically computed snapshot capacities.
+    ///
+    /// Even tiny images get this much virtual capacity so normal runtime writes
+    /// (logs, caches, package installs) into the cloned root filesystem can
+    /// never hit ENOSPC.
+    public static let minimumDynamicCapacityBytes: UInt64 = 4.gib()
+
+    /// Headroom added on top of the estimated unpacked content size.
+    public static let dynamicCapacityHeadroomBytes: UInt64 = 1.gib()
+
+    /// Assumed worst-case compression ratio when estimating unpacked layer size
+    /// from compressed layer sizes. Deliberately pessimistic: overestimating
+    /// only costs virtual address space in a sparse file.
+    private static let maxCompressionRatio: UInt64 = 4
+
+    /// Estimates a snapshot capacity from the image manifest.
+    ///
+    /// Returns a value within [minimumDynamicCapacityBytes,
+    /// maximumSnapshotCapacityBytes], so the result never provisions more than
+    /// the historic default. Falls back to the default when the manifest or
+    /// layer sizes cannot be read: sizing must never fail an unpack. Layer
+    /// sizes come from the registry and are therefore untrusted, which is
+    /// exactly why the result is clamped instead of used directly.
+    static func estimatedCapacity(image: Containerization.Image, platform: Platform) async -> UInt64 {
+        do {
+            let manifest = try await image.manifest(for: platform)
+            var compressed: UInt64 = 0
+            for layer in manifest.layers {
+                guard layer.size >= 0 else {
+                    return defaultSnapshotCapacityBytes
+                }
+                let (partial, overflow) = compressed.addingReportingOverflow(UInt64(layer.size))
+                guard !overflow else {
+                    return maximumSnapshotCapacityBytes
+                }
+                compressed = partial
+            }
+            let (scaled, overflow) = compressed.multipliedReportingOverflow(by: maxCompressionRatio)
+            guard !overflow else {
+                return maximumSnapshotCapacityBytes
+            }
+            let (total, overflow2) = scaled.addingReportingOverflow(dynamicCapacityHeadroomBytes)
+            guard !overflow2 else {
+                return maximumSnapshotCapacityBytes
+            }
+            return min(max(total, minimumDynamicCapacityBytes), maximumSnapshotCapacityBytes)
+        } catch {
+            return defaultSnapshotCapacityBytes
+        }
+    }
 
     /// Minimum virtual capacity accepted for an image snapshot.
     ///
@@ -85,7 +137,10 @@ public actor SnapshotStore {
             if image.reference == initImage {
                 capacityInBytes = 512.mib()
             } else {
-                capacityInBytes = Self.defaultSnapshotCapacityBytes
+                // Measured capacity with a safe fallback: tiny images (alpine)
+                // get a few GiB instead of hundreds, while the fallback and the
+                // maximum cap preserve the old guarantees for anything unusual.
+                capacityInBytes = await Self.estimatedCapacity(image: image, platform: platform)
             }
             return EXT4Unpacker(capacityInBytes: capacityInBytes, journal: .init(defaultMode: .ordered))
         }

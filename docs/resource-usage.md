@@ -110,7 +110,9 @@ You can also output statistics in JSON format for scripting:
 
 Each container gets a macOS sparse disk image for its writable filesystem. Named
 volumes get their own sparse disk image too. Image snapshots are also sparse
-images (128 GiB virtual size by default); `container system df` reports the
+images, sized from the image content with headroom for runtime writes (with a
+128 GiB fallback when the content size cannot be determined, and `--size` on
+`container image pull` for an explicit size); `container system df` reports the
 space they actually occupy rather than their virtual size. As your
 containerized application writes
 data, these images grow; when a container process deletes a file, the freed blocks

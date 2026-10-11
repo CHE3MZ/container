@@ -613,7 +613,7 @@ container image pull [--scheme <scheme>] [--progress <type>] [--max-concurrent-d
 *   `-a, --arch <arch>`: Limit the pull to the specified architecture
 *   `--os <os>`: Limit the pull to the specified OS
 *   `--platform <platform>`: Limit the pull to the specified platform (format: os/arch[/variant], takes precedence over --os and --arch)
-*   `--size <size>`: Virtual size of the unpacked image snapshot (for example `10g`). Must be between 1GiB and 512GiB; defaults to the system default when omitted. The snapshot doubles as the container's writable filesystem, so allow headroom beyond the image content.
+*   `--size <size>`: Virtual size of the unpacked image snapshot (for example `10g`). Must be between 1GiB and 512GiB; when omitted the size is computed from the image content with headroom. The snapshot doubles as the container's writable filesystem, so allow headroom beyond the image content.
 
 ### `container image push`
 

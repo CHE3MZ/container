@@ -200,7 +200,9 @@ jobs:
         # installer package (pkgbuild needs release signing; unrelated here).
         run: |
           set -euo pipefail
-          make "bin/debug/staging/"
+          # NOTE: no trailing slash: the Makefile target is literally
+          # `bin/debug/staging` (STAGING_DIR has no trailing slash).
+          make "bin/debug/staging"
           STAGE="$PWD/bin/debug/staging"
           OPTS="--force --sign - --timestamp=none"
           codesign $OPTS --identifier com.apple.container.cli "$STAGE/bin/container"

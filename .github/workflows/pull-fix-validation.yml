@@ -1,0 +1,262 @@
+name: pull-fix validation (fork-only)
+
+# Test scaffolding for the host-only pull unpack fix (#2378). Lives ONLY on
+# test/* branches so it never leaks into upstream PRs. Upstream validates
+# via .github/workflows/common.yml on self-hosted macOS Tahoe runners;
+# this workflow approximates what it can on GitHub-hosted runners:
+# changed-file formatting, full build, and unit tests.
+# Integration tests are deliberately excluded: they need nested
+# virtualization, which hosted runners do not provide. Only macos-26 is in
+# the matrix: the macos-15 image ships at most Swift 6.1 while the package
+# requires Swift tools 6.2, so that leg can never pass (verified).
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - "test/**"
+  workflow_dispatch:
+
+jobs:
+  changed-files:
+    name: List changed Swift files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      swift_files: ${{ steps.diff.outputs.swift_files }}
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Diff Swift files against main
+        id: diff
+        run: |
+          files=$(git diff --name-only origin/main...HEAD -- '*.swift' | grep -v '\.pb\.swift' | grep -v '\.grpc\.swift' || true)
+          echo "Changed Swift files:"
+          echo "$files"
+          {
+            echo "swift_files<<EOF"
+            echo "$files"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  format-check:
+    name: swift-format lint (changed files only)
+    needs: changed-files
+    if: needs.changed-files.outputs.swift_files != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version || true
+
+      - name: Select latest installed Xcode
+        # Hosted images ship several Xcodes with an often-outdated default;
+        # the package requires a recent Swift tools version, so pick the
+        # newest Xcode present (BSD sort has no -V; alphabetical tail works
+        # for the Xcode_<major> naming used on hosted images).
+        run: |
+          ls -d /Applications/Xcode*.app
+          latest="$(ls -d /Applications/Xcode*.app | sort | tail -1)/Contents/Developer"
+          echo "Selecting Xcode at $latest"
+          sudo xcode-select -s "$latest"
+          swift --version
+
+      - name: Lint changed files with repo config
+        run: |
+          files=$(git diff --name-only origin/main...HEAD -- '*.swift' | grep -v '\.pb\.swift' | grep -v '\.grpc\.swift' || true)
+          # shellcheck disable=SC2086
+          swift format lint --strict --configuration .swift-format-nolint $files
+
+  license-check:
+    name: License headers
+    # hawkeye ships Apple-silicon macOS binaries only; ubuntu runners cannot
+    # install it (upstream runs this on self-hosted macOS).
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check license headers
+        env:
+          HAWKEYE_AUTO_INSTALL: "1"
+        run: ./scripts/ensure-hawkeye-exists.sh && .local/bin/hawkeye check --fail-if-unknown
+
+  build:
+    name: Build container CLI
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version || true
+
+      - name: Select latest installed Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          latest="$(ls -d /Applications/Xcode*.app | sort | tail -1)/Contents/Developer"
+          echo "Selecting Xcode at $latest"
+          sudo xcode-select -s "$latest"
+          swift --version
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      # NOTE: intentionally `swift build`, not `make container`: the latter
+      # also builds the installer package, whose ad-hoc signing step fails on
+      # hosted runners (and is unrelated to source changes).
+      - name: Build container product
+        run: swift build -c debug -Xswiftc -warnings-as-errors -Xswiftc -enable-testing --product container
+
+      - name: CLI smoke test (no daemon)
+        run: |
+          bin=$(swift build -c debug --show-bin-path)/container
+          "$bin" image pull --help | grep -q -- "'all'" && echo "--platform all documented"
+          if "$bin" image pull --help | grep -q -- '--all-platforms'; then
+            echo "--all-platforms should be gone"
+            exit 1
+          fi
+
+  unit-tests:
+    name: Unit tests (no integration)
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Select latest installed Xcode
+        run: |
+          latest="$(ls -d /Applications/Xcode*.app | sort | tail -1)/Contents/Developer"
+          echo "Selecting Xcode at $latest"
+          sudo xcode-select -s "$latest"
+          swift --version
+
+      # TestCLI and IntegrationTests need Virtualization.framework VMs
+      # (nested virt), unavailable on hosted runners.
+      - name: Run unit tests
+        run: swift test -c debug -Xswiftc -warnings-as-errors -Xswiftc -enable-testing --skip TestCLI --skip IntegrationTests
+
+  live-pull:
+    # Functional proof that pull unpacks host only by default, that an
+    # explicit platform unpacks that platform, and that --platform all
+    # restores the old unpack-everything behavior. Needs no VMs: pull and
+    # unpack are pure userspace. Uses an isolated CONTAINER_APP_ROOT.
+    name: Live pull platform smoke test
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Select latest installed Xcode
+        run: |
+          latest="$(ls -d /Applications/Xcode*.app | sort | tail -1)/Contents/Developer"
+          sudo xcode-select -s "$latest"
+          swift --version
+
+      - name: Build all products (services must exist for system start)
+        # NOTE: not `--product container`: `system start` launches helper
+        # binaries (apiserver, core-images, ...) which must be built too.
+        run: swift build -c debug -Xswiftc -warnings-as-errors -Xswiftc -enable-testing
+
+      - name: Stage install layout and ad-hoc sign
+        # Mirrors the Makefile staging + codesign steps without building the
+        # installer package (pkgbuild needs release signing; unrelated here).
+        run: |
+          set -euo pipefail
+          # NOTE: no trailing slash: the Makefile target is literally
+          # `bin/debug/staging` (STAGING_DIR has no trailing slash).
+          make "bin/debug/staging"
+          STAGE="$PWD/bin/debug/staging"
+          OPTS="--force --sign - --timestamp=none"
+          codesign $OPTS --identifier com.apple.container.cli "$STAGE/bin/container"
+          codesign $OPTS --identifier com.apple.container.apiserver "$STAGE/bin/container-apiserver"
+          codesign $OPTS --prefix=com.apple.container. "$STAGE/libexec/container/plugins/container-core-images/bin/container-core-images"
+          codesign $OPTS --prefix=com.apple.container. --entitlements=signing/container-runtime-linux.entitlements "$STAGE/libexec/container/plugins/container-runtime-linux/bin/container-runtime-linux"
+          codesign $OPTS --prefix=com.apple.container. --entitlements=signing/container-network-vmnet.entitlements "$STAGE/libexec/container/plugins/container-network-vmnet/bin/container-network-vmnet"
+          codesign $OPTS --prefix=com.apple.container. "$STAGE/libexec/container/plugins/machine-apiserver/bin/machine-apiserver"
+          codesign $OPTS --prefix=com.apple.container. "$STAGE/libexec/container/plugins/k8s/bin/k8s"
+          codesign $OPTS --prefix=com.apple.container. "$STAGE/libexec/container/plugins/build/bin/build"
+          codesign $OPTS --prefix=com.apple.container. "$STAGE/libexec/container/plugins/builder/bin/builder"
+          ls "$STAGE/bin" "$STAGE/libexec/container/plugins"
+
+      - name: Pull images and assert snapshot counts
+        timeout-minutes: 60
+        run: |
+          set -euo pipefail
+          export APP_ROOT="$(mktemp -d "${RUNNER_TEMP}/approot.XXXXXX")"
+          export CONTAINER_APP_ROOT="$APP_ROOT"
+          export CONTAINER_INSTALL_ROOT="$PWD/bin/debug/staging"
+          BIN="$PWD/bin/debug/staging/bin/container"
+          count_snapshots() {
+            find "$APP_ROOT/snapshots" -name snapshot -type f | wc -l | tr -d ' '
+          }
+          echo "APP_ROOT=$APP_ROOT"
+          "$BIN" system start --timeout 180 --enable-kernel-install --app-root "$APP_ROOT" --install-root "$PWD/bin/debug/staging"
+
+          # Default pull: exactly one snapshot (the host platform).
+          "$BIN" image pull alpine:latest
+          host_count=$(count_snapshots)
+          echo "default pull snapshot files: $host_count"
+          test "$host_count" -eq 1
+
+          # Explicit --platform unpacks that platform as well.
+          "$BIN" image pull --platform linux/amd64 alpine:latest
+          explicit_count=$(count_snapshots)
+          echo "explicit amd64 snapshot files: $explicit_count"
+          test "$explicit_count" -gt "$host_count"
+
+          # --platform all restores unpacking every platform in the index.
+          "$BIN" image pull --platform all alpine:latest
+          all_count=$(count_snapshots)
+          echo "--platform all snapshot files: $all_count"
+          test "$all_count" -gt "$explicit_count"
+
+          # --platform all is mutually exclusive with the os/arch filters.
+          if "$BIN" image pull --platform all --os linux alpine:latest; then
+            echo "--platform all with --os unexpectedly succeeded"
+            exit 1
+          fi
+
+          echo "allocated:"
+          du -sh "$APP_ROOT/snapshots"
+          "$BIN" system df
+          "$BIN" system stop || true
